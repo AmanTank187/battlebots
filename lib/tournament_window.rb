@@ -16,6 +16,11 @@ module BattleBots
     # Assumes ~60 updates/sec (vsync). If both survive, highest health wins unless both are undamaged.
     MATCH_TIME_SECONDS = 60
     MATCH_LIMIT_FRAMES = MATCH_TIME_SECONDS * 60
+    # Match clock runs at ~60 ticks/sec (see tick_match_timeout!). Last 10s: yellow for first 5s, red pulsing for last 5s.
+    MATCH_TIMER_RED_LAST_FRAMES = 5 * 60
+    MATCH_TIMER_YELLOW_LAST_FRAMES = 10 * 60
+    MATCH_TIMER_SUFFIX_BUMP_MS = 500
+    MATCH_TIMER_SUFFIX_BUMP_PEAK = 0.28
     INTRO_FRAMES = 180
     WIN_DISPLAY_FRAMES = 180
     BRACKET_DISPLAY_FRAMES = 240
@@ -49,6 +54,8 @@ module BattleBots
       @big_font = Gosu::Font.new(120, name: Gosu::default_font_name)
       @bracket_font = Gosu::Font.new(18, name: Gosu::default_font_name)
       @bracket_remaining = 0
+      @match_timer_bump_last_sec = nil
+      @match_timer_bump_started_ms = nil
       setup_next_match!
     end
 
@@ -208,6 +215,8 @@ module BattleBots
         rebuild_audience_layout!
         @players = [Proxy.new(self, a), Proxy.new(self, b)]
         @match_ticks_remaining = MATCH_LIMIT_FRAMES
+        @match_timer_bump_last_sec = nil
+        @match_timer_bump_started_ms = nil
         bullets.clear
         explosions.clear
         if @schedule.take_opening_bracket! || @schedule.take_round_bracket_flag!
@@ -268,8 +277,7 @@ module BattleBots
       end
 
       if @phase == :fighting && @match_ticks_remaining&.positive?
-        sec = (@match_ticks_remaining / 60.0).ceil
-        rows << [:text, "Match time left: #{sec}s", white]
+        rows << [:timer, @match_ticks_remaining]
       end
 
       if @phase == :cooldown
@@ -304,6 +312,8 @@ module BattleBots
         case row[0]
         when :title, :text
           @hud_font.draw_text(row[1], tx, ty, z_text, 1.0, 1.0, row[2])
+        when :timer
+          draw_match_timer_line(tx, ty, z_text, row[1])
         when :champion
           draw_hud_champion_line(tx, ty, z_text)
         when :match
@@ -317,6 +327,10 @@ module BattleBots
       case row[0]
       when :title, :text
         @hud_font.text_width(row[1])
+      when :timer
+        ticks = row[1]
+        sec = (ticks / 60.0).ceil
+        @hud_font.text_width('Match time left: ') + (@hud_font.text_width("#{sec}s") * (1.0 + MATCH_TIMER_SUFFIX_BUMP_PEAK)).ceil
       when :champion
         k = @schedule.champion
         @hud_font.text_width('Champion: ') + @hud_font.text_width(k.new.name)
@@ -328,6 +342,46 @@ module BattleBots
       else
         0
       end
+    end
+
+    def match_timer_color(ticks)
+      if ticks <= MATCH_TIMER_RED_LAST_FRAMES
+        0xff_ff5555
+      elsif ticks <= MATCH_TIMER_YELLOW_LAST_FRAMES
+        0xff_ffdd55
+      else
+        0xff_ffffff
+      end
+    end
+
+    def draw_match_timer_line(tx, ty, z, ticks)
+      sec = (ticks / 60.0).ceil
+      prefix = 'Match time left: '
+      suffix = "#{sec}s"
+
+      if @match_timer_bump_last_sec.nil?
+        @match_timer_bump_last_sec = sec
+      elsif sec != @match_timer_bump_last_sec
+        @match_timer_bump_started_ms = Gosu.milliseconds
+        @match_timer_bump_last_sec = sec
+      end
+
+      suffix_scale = 1.0
+      if @match_timer_bump_started_ms
+        elapsed = Gosu.milliseconds - @match_timer_bump_started_ms
+        if elapsed < MATCH_TIMER_SUFFIX_BUMP_MS
+          t = elapsed / MATCH_TIMER_SUFFIX_BUMP_MS.to_f
+          suffix_scale = 1.0 + MATCH_TIMER_SUFFIX_BUMP_PEAK * (1.0 - t)
+        end
+      end
+
+      col_suffix = match_timer_color(ticks)
+      w_pre = @hud_font.text_width(prefix)
+      w_suf0 = @hud_font.text_width(suffix)
+      sx = tx + w_pre + (w_suf0 - w_suf0 * suffix_scale) / 2.0
+
+      @hud_font.draw_text(prefix, tx, ty, z, 1.0, 1.0, 0xff_eeeeee)
+      @hud_font.draw_text(suffix, sx, ty, z, suffix_scale, suffix_scale, col_suffix)
     end
 
     def draw_round_panel_border(x, y, w, h, z, color)
