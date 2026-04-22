@@ -1,4 +1,5 @@
 require 'players'
+require 'bots/bot'
 require 'tournament_schedule'
 require 'tournament_health_timeout'
 require 'tournament_bracket_visual'
@@ -8,13 +9,13 @@ module BattleBots
   class TournamentWindow < Gosu::Window
     include BattleBots::Players
 
-    COOLDOWN_FRAMES = 85
+    COOLDOWN_FRAMES = 0
     # Assumes ~60 updates/sec (vsync). If both survive, highest health wins unless both are undamaged.
-    MATCH_TIME_SECONDS = 90
+    MATCH_TIME_SECONDS = 60
     MATCH_LIMIT_FRAMES = MATCH_TIME_SECONDS * 60
-    INTRO_FRAMES = 120
-    WIN_DISPLAY_FRAMES = 96
-    BRACKET_DISPLAY_FRAMES = 200
+    INTRO_FRAMES = 180
+    WIN_DISPLAY_FRAMES = 180
+    BRACKET_DISPLAY_FRAMES = 240
 
     attr_accessor :bullets, :players, :explosions
 
@@ -33,10 +34,10 @@ module BattleBots
       @last_result = nil
       @last_winner_class = nil
       @current_pair = nil
-      @hud_font = Gosu::Font.new(28, name: Gosu::default_font_name)
-      @title_font = Gosu::Font.new(56, name: Gosu::default_font_name)
-      @big_font = Gosu::Font.new(120, name: Gosu::default_font_name)
-      @bracket_font = Gosu::Font.new(18, name: Gosu::default_font_name)
+      @hud_font = Gosu::Font.new(28, name: Gosu.default_font_name)
+      @title_font = Gosu::Font.new(56, name: Gosu.default_font_name)
+      @big_font = Gosu::Font.new(120, name: Gosu.default_font_name)
+      @bracket_font = Gosu::Font.new(18, name: Gosu.default_font_name)
       @bracket_remaining = 0
       setup_next_match!
     end
@@ -55,16 +56,10 @@ module BattleBots
       when :win_display
         @win_display_remaining -= 1
         enter_cooldown! if @win_display_remaining <= 0
+        finalize_round_and_prepare_next! if @win_display_remaining <= 0
       when :cooldown
         @cooldown_frames -= 1
-        if @cooldown_frames <= 0
-          if @schedule.finished?
-            @phase = :complete
-            @players = []
-          else
-            setup_next_match!
-          end
-        end
+        finalize_round_and_prepare_next! if @cooldown_frames <= 0
       when :complete
         # frozen — ESC to quit
       end
@@ -78,10 +73,10 @@ module BattleBots
       draw_bracket_overlay if @phase == :bracket
       draw_intro_overlay if @phase == :intro
       draw_match_result_overlay if @phase == :win_display
-      if @phase == :complete
-        draw_champion_overlay if @schedule.champion
-        draw_void_overlay if @schedule.void_tournament?
-      end
+      return unless @phase == :complete
+
+      draw_champion_overlay if @schedule.champion
+      draw_void_overlay if @schedule.void_tournament?
     end
 
     def button_down(id)
@@ -102,7 +97,7 @@ module BattleBots
     private
 
     def tick_match_timeout!
-      return unless @match_ticks_remaining
+      return unless @match_ticks_remaining&.positive?
 
       @match_ticks_remaining -= 1
       return if @match_ticks_remaining.positive?
@@ -168,11 +163,11 @@ module BattleBots
         @schedule.record_match_winner(winner_class)
       end
 
-      # Elimination: no post-match countdown; clock and arena clear immediately.
+      # Elimination: go straight to the next match (or champion screen); no cooldown ticker.
       bullets.clear
       explosions.clear
       @match_ticks_remaining = nil
-      enter_cooldown!
+      finalize_round_and_prepare_next!
     end
 
     def setup_next_match!
@@ -214,48 +209,64 @@ module BattleBots
     end
 
     def enter_cooldown!
+      @match_ticks_remaining = nil
       @win_display_remaining = 0
       @phase = :cooldown
       @cooldown_frames = COOLDOWN_FRAMES
     end
 
-    def draw_hud
-      lines = []
-      lines << "Tournament — Round #{@schedule.round_number}"
-      if @schedule.void_tournament?
-        lines << 'No champion (both undamaged at time limit)'
-      elsif @schedule.champion
-        lines << "Champion: #{@schedule.champion.new.name}"
-      elsif @current_pair
-        left = @current_pair[0].new.name
-        right = @current_pair[1].new.name
-        lines << "Match: #{left}  vs  #{right}"
-      end
-      if @phase == :fighting && @match_ticks_remaining
-        sec = (@match_ticks_remaining / 60.0).ceil
-        lines << "Match time left: #{sec}s"
-      end
-      lines << (@phase == :cooldown ? "Next match in #{[@cooldown_frames, 0].max}..." : '')
-      if @phase == :bracket || @phase == :intro || @phase == :win_display
-        lines << 'Space - skip bracket / title / winner animation'
-      end
-
-      y = 8
-      lines.each do |line|
-        next if line.empty?
-
-        @hud_font.draw_text(line, 12, y, 0, 1.0, 1.0, 0xff_ffffff)
-        y += 32
+    def finalize_round_and_prepare_next!
+      if @schedule.finished?
+        @phase = :complete
+        @players = []
+      else
+        setup_next_match!
       end
     end
 
+    def draw_hud
+      white = 0xff_ffffff
+      x = 12
+      y = 8
+      @hud_font.draw_text("Tournament — Round #{@schedule.round_number}", x, y, 0, 1.0, 1.0, white)
+      y += 32
+
+      if @schedule.void_tournament?
+        @hud_font.draw_text('No champion (both undamaged at time limit)', x, y, 0, 1.0, 1.0, white)
+        y += 32
+      elsif @schedule.champion
+        draw_hud_champion_line(x, y)
+        y += 32
+      elsif @current_pair
+        draw_hud_match_line(x, y)
+        y += 32
+      end
+
+      if @phase == :fighting && @match_ticks_remaining&.positive?
+        sec = (@match_ticks_remaining / 60.0).ceil
+        @hud_font.draw_text("Match time left: #{sec}s", x, y, 0, 1.0, 1.0, white)
+        y += 32
+      end
+
+      if @phase == :cooldown
+        @hud_font.draw_text("Next match in #{[@cooldown_frames, 0].max}...", x, y, 0, 1.0, 1.0, white)
+        y += 32
+      end
+
+      return unless @phase == :bracket || @phase == :intro || @phase == :win_display
+
+      @hud_font.draw_text('Space - skip bracket / title / winner animation', x, y, 0, 1.0, 1.0, white)
+    end
+
     def draw_champion_overlay
-      name = @schedule.champion.new.name
+      k = @schedule.champion
+      name = k.new.name
       title = 'CHAMPION'
       tx = (width - @big_font.text_width(title)) / 2
       @big_font.draw_text(title, tx, height / 2 - 100, 0, 1.0, 1.0, 0xff_ffcc00)
       nx = (width - @title_font.text_width(name)) / 2
-      @title_font.draw_text(name, nx, height / 2 + 20, 0, 1.0, 1.0, 0xff_ffffff)
+      nc = BattleBots::Bots::Bot.name_color_for_source(k.bot_source)
+      @title_font.draw_text(name, nx, height / 2 + 20, 0, 1.0, 1.0, nc)
     end
 
     def draw_void_overlay
@@ -278,12 +289,13 @@ module BattleBots
       rx = (width - @title_font.text_width(r)) / 2
       @title_font.draw_text(r, rx, height * 0.30, 20, 1.0, 1.0, 0xff_eeeeee)
 
-      left = @current_pair[0].new.name
-      right = @current_pair[1].new.name
+      a, b = @current_pair
+      left = a.new.name
+      right = b.new.name
       lx = (width * 0.5) - @title_font.text_width(left) - 80
       rx = (width * 0.5) + 80
-      @title_font.draw_text(left, lx, height * 0.44, 20, 1.0, 1.0, 0xff_ccf5ff)
-      @title_font.draw_text(right, rx, height * 0.44, 20, 1.0, 1.0, 0xff_ffccf5)
+      @title_font.draw_text(left, lx, height * 0.44, 20, 1.0, 1.0, name_color_for_bot_class(a))
+      @title_font.draw_text(right, rx, height * 0.44, 20, 1.0, 1.0, name_color_for_bot_class(b))
 
       pulse = 1.0 + 0.06 * Math.sin(Gosu.milliseconds * 0.005)
       vs = 'VS'
@@ -293,7 +305,10 @@ module BattleBots
 
       bar_w = width * 0.5 * @intro_remaining.to_f / INTRO_FRAMES
       Gosu.draw_rect((width - width * 0.5) / 2, height * 0.62, width * 0.5, 8, Gosu::Color.new(60, 40, 40, 40), 20)
-      Gosu.draw_rect((width - width * 0.5) / 2, height * 0.62, bar_w, 8, Gosu::Color.new(255, 90, 200, 120), 21) if bar_w.positive?
+      if bar_w.positive?
+        Gosu.draw_rect((width - width * 0.5) / 2, height * 0.62, bar_w, 8, Gosu::Color.new(255, 90, 200, 120),
+                       21)
+      end
 
       sec = (@intro_remaining / 60.0).ceil
       t = "Starting in #{sec}s..."
@@ -322,9 +337,11 @@ module BattleBots
         wx = (width - @big_font.text_width(w) * pulse) / 2
         @big_font.draw_text(w, wx, height * 0.38, 20, pulse, pulse, 0xff_ffcc44)
 
-        name = @last_winner_class.new.name
+        k = @last_winner_class
+        name = k.new.name
         nx = (width - @title_font.text_width(name)) / 2
-        @title_font.draw_text(name, nx, height * 0.56, 20, 1.0, 1.0, 0xff_ffffff)
+        nc = BattleBots::Bots::Bot.name_color_for_source(k.bot_source)
+        @title_font.draw_text(name, nx, height * 0.56, 20, 1.0, 1.0, nc)
       end
 
       hint = 'Next match follows...'
@@ -355,6 +372,36 @@ module BattleBots
       hint = 'Space - continue to match intro'
       tx = (width - @hud_font.text_width(hint)) / 2
       @hud_font.draw_text(hint, tx, height - 28, 20, 1.0, 1.0, 0xff_bbbbbb)
+    end
+
+    def draw_hud_champion_line(x, y)
+      k = @schedule.champion
+      nm = k.new.name
+      pre = 'Champion: '
+      white = 0xff_ffffff
+      @hud_font.draw_text(pre, x, y, 0, 1.0, 1.0, white)
+      x2 = x + @hud_font.text_width(pre)
+      @hud_font.draw_text(nm, x2, y, 0, 1.0, 1.0, name_color_for_bot_class(k))
+    end
+
+    def draw_hud_match_line(x, y)
+      a, b = @current_pair
+      ln = a.new.name
+      rn = b.new.name
+      pre = 'Match: '
+      mid = '  vs  '
+      white = 0xff_ffffff
+      @hud_font.draw_text(pre, x, y, 0, 1.0, 1.0, white)
+      x2 = x + @hud_font.text_width(pre)
+      @hud_font.draw_text(ln, x2, y, 0, 1.0, 1.0, name_color_for_bot_class(a))
+      x2 += @hud_font.text_width(ln)
+      @hud_font.draw_text(mid, x2, y, 0, 1.0, 1.0, white)
+      x2 += @hud_font.text_width(mid)
+      @hud_font.draw_text(rn, x2, y, 0, 1.0, 1.0, name_color_for_bot_class(b))
+    end
+
+    def name_color_for_bot_class(klass)
+      BattleBots::Bots::Bot.name_color_for_source(klass.bot_source)
     end
   end
 end

@@ -3,6 +3,7 @@ $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
 
 require 'gosu'
 require 'players'
+require 'bots/bot'
 
 
 module BattleBots
@@ -54,7 +55,11 @@ module BattleBots
     private 
 
     def display_winner(proxy)
-      @font.draw_text("WINNER!", 200, 300, 0, 1.0, 1.0, 0xff_ffff00)
+      @font.draw_text('WINNER!', 200, 300, 0, 1.0, 1.0, 0xff_ffff00)
+      nm = proxy.bot.name
+      sc = 0.42
+      nc = BattleBots::Bots::Bot.name_color_for_source(proxy.bot.bot_source)
+      @font.draw_text(nm, 200, 520, 0, sc, sc, nc)
       unless @winner_played
         @winner_played = true
       end

@@ -1,5 +1,6 @@
 require 'bullets'
 require 'explosion'
+require 'bots/bot'
 
 module BattleBots
   class Proxy
@@ -47,7 +48,13 @@ module BattleBots
       if @health > 0
         @body_image.draw_rot(@x, @y, 1, @heading)
         @turret_image.draw_rot(@x, @y, 1, @turret)
-        @font.draw_text("#{@bot.name}: #{@health.to_i}", @x - 50, @y + 25, 0, 1.0, 1.0, 0xff_ffff00)
+        label = "#{@bot.name}: "
+        hx = @x - 50
+        hy = @y + 25
+        z = 0
+        name_col = BattleBots::Bots::Bot.name_color_for_source(@bot.bot_source)
+        @font.draw_text(label, hx, hy, z, 1.0, 1.0, name_col)
+        @font.draw_text(@health.to_i.to_s, hx + @font.text_width(label), hy, z, 1.0, 1.0, 0xff_eeeeee)
       end
     end
 
@@ -100,8 +107,9 @@ module BattleBots
     end
 
     def observe_battlespace
-      battlespace = { 
-        x: @x, y: @y, health: @health, turret: @turret, heading: @heading, contacts: []
+      battlespace = {
+        x: @x, y: @y, health: @health, turret: @turret, heading: @heading, contacts: [],
+        width: @window.width, height: @window.height
       }
 
       @window.players.each do |enemy|
