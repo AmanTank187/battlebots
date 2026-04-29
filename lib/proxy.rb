@@ -184,6 +184,8 @@ module BattleBots
     end
 
     def limit(value, limit)
+      return 0 if value.nil? || limit.nil?
+
       value = limit if value > limit && limit > 0
       value = limit if value < limit && limit < 0
       value
